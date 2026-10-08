@@ -1,4 +1,4 @@
-"""두 CLI가 공유하는 데몬 자동 시작과 요청·응답 전송."""
+"""두 CLI가 공유하는 데몬 연결과 요청·응답 전송."""
 
 import os
 import socket
@@ -38,7 +38,8 @@ class Client:
         return cls(sock)
 
     @classmethod
-    def open(cls, paths=None, auto_start=True):
+    def open(cls, paths=None, auto_start=False):
+        """기존 데몬에 연결한다. 명시적 시작 명령만 auto_start를 사용한다."""
         if paths is None:
             paths = RuntimePaths()
         if not auto_start:

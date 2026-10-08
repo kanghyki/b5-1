@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from mini_redis.client import Client, ServerError
 from mini_redis.commands import quote
@@ -41,6 +42,17 @@ class ScriptedSocket:
 
     def close(self):
         self.closed = True
+
+
+class ClientConnectionTests(unittest.TestCase):
+    def test_open_does_not_start_an_absent_daemon(self):
+        with tempfile.TemporaryDirectory(prefix="mr-connect-") as directory:
+            paths = RuntimePaths(directory)
+            with patch("mini_redis.client.subprocess.run") as launch:
+                with self.assertRaises(FileNotFoundError):
+                    Client.open(paths)
+                launch.assert_not_called()
+            self.assertFalse(os.path.exists(paths.socket))
 
 
 class ClientResponseTests(unittest.TestCase):
@@ -135,6 +147,12 @@ class ClientIntegrationTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.paths = RuntimePaths(self.directory.name)
         self.addCleanup(self.stop_daemon)
+        result = subprocess.run(
+            (sys.executable, os.path.join(ROOT, "main.py"), "--runtime-dir",
+             self.directory.name, "daemon", "start"),
+            cwd=ROOT, capture_output=True, text=True, timeout=6,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.client = self.other_client()
 
     def other_client(self):

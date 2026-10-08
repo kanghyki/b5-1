@@ -18,7 +18,7 @@ def usage():
 
 def daemon_control(paths, action):
     if action == "start":
-        with Client.open(paths) as client:
+        with Client.open(paths, auto_start=True) as client:
             result = client.request(kind="P")
             print("OK" if not result.error else result.text)
             return int(result.error)
@@ -35,7 +35,7 @@ def daemon_control(paths, action):
         print("running")
         return 0
     if action == "stop":
-        # 자동 시작과 종료가 겹쳐 새 클라이언트가 종료 중인 데몬에 연결되지 않게 한다.
+        # 명시적 시작과 종료가 겹치지 않도록 종료 확인까지 잠금을 유지한다.
         with paths.lock("startup"):
             try:
                 with Client.open(paths, auto_start=False) as client:
@@ -77,7 +77,13 @@ def main(argv=None):
                 usage()
                 return 2
             return daemon_control(paths, arguments[1].lower())
-        with Client.open(paths) as client:
+        try:
+            client = Client.open(paths)
+        except (FileNotFoundError, ConnectionRefusedError):
+            print("(error) daemon is not running; run 'daemon start' with the same runtime directory",
+                  file=sys.stderr)
+            return 1
+        with client:
             if not arguments:
                 return Repl(client).run()
             result = client.execute(*arguments, on_event=lambda text: print(text, flush=True))

@@ -9,6 +9,7 @@ import termios
 import time
 import unittest
 
+from mini_redis.client import Client
 from mini_redis.runtime import RuntimePaths
 
 
@@ -64,8 +65,9 @@ class CliTests(unittest.TestCase):
             if stream is not None:
                 stream.close()
 
-    def test_automatic_start_shared_data_errors_and_restart(self):
+    def test_explicit_start_shared_data_errors_and_restart(self):
         self.assertEqual(self.run_cli("daemon", "status").stdout, "stopped\n")
+        self.assertEqual(self.run_cli("daemon", "start").stdout, "OK\n")
         self.assertEqual(self.run_cli("SET", "키", '한 글"\\\n').stdout, "OK\n")
         self.assertEqual(self.run_cli("GET", "키").stdout, '"한 글\\"\\\\\\n"\n')
         self.assertEqual(self.run_cli("daemon", "status").stdout, "running\n")
@@ -74,9 +76,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("wrong number of arguments", error.stdout)
         self.assertEqual(self.run_cli("daemon", "stop").stdout, "OK\n")
         self.assertFalse(os.path.exists(os.path.join(self.directory.name, "redis.sock")))
+        self.assertEqual(self.run_cli("GET", "키").returncode, 1)
+        self.assertEqual(self.run_cli("daemon", "start").stdout, "OK\n")
         self.assertEqual(self.run_cli("GET", "키").stdout, "(nil)\n")
 
-    def test_concurrent_clients_start_only_one_shared_daemon(self):
+    def test_clients_require_a_running_daemon(self):
+        for arguments in ((), ("GET", "key"), ("SET", "key", "value"),
+                          ("SUBSCRIBE", "news")):
+            with self.subTest(arguments=arguments):
+                result = self.run_cli(*arguments, input="quit\n")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("daemon is not running", result.stderr)
+                self.assertIn("daemon start", result.stderr)
+                self.assertFalse(os.path.exists(os.path.join(self.directory.name, "redis.sock")))
+        self.assertEqual(self.run_cli("daemon", "status").stdout, "stopped\n")
+
+    def test_concurrent_explicit_starts_use_one_shared_daemon(self):
+        starters = tuple(self.start_client("daemon", "start", stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE) for _ in range(8))
+        for process in starters:
+            stdout, stderr = process.communicate(timeout=6)
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            self.assertEqual(stdout, b"OK\n")
         processes = tuple(self.start_client("SET", "key%d" % index, str(index),
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                           for index in range(8))
@@ -86,11 +108,10 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stdout, b"OK\n")
         self.assertEqual(self.run_cli("DBSIZE").stdout, "(integer) 8\n")
 
-    def test_new_client_waits_for_daemon_lifecycle_lock(self):
-        self.assertEqual(self.run_cli("SET", "initial", "value").returncode, 0)
+    def test_daemon_start_waits_for_lifecycle_lock(self):
         paths = RuntimePaths(self.directory.name)
         with paths.lock("startup"):
-            process = self.start_client("SET", "after", "value",
+            process = self.start_client("daemon", "start",
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             with self.assertRaises(subprocess.TimeoutExpired):
                 process.wait(timeout=0.2)
@@ -99,6 +120,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stdout, b"OK\n")
 
     def test_piped_repl_recovers_after_error_and_quits(self):
+        self.assertEqual(self.run_cli("daemon", "start").returncode, 0)
         result = self.run_cli(input='SET key "hello world"\nGET\nGET key\nquit\n')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("mini-redis> ", result.stdout)
@@ -107,6 +129,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.run_cli("GET", "key").stdout, '"hello world"\n')
 
     def test_command_line_subscription_streams_and_disconnects(self):
+        self.assertEqual(self.run_cli("daemon", "start").returncode, 0)
         subscriber = self.start_client("SUBSCRIBE", "news", stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE)
         read_until(subscriber.stdout.fileno(), b'subscribe "news"')
@@ -118,6 +141,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.run_cli("PUBLISH", "news", "after").stdout, "(integer) 0\n")
 
     def test_terminal_repl_receives_events_without_losing_typed_input(self):
+        self.assertEqual(self.run_cli("daemon", "start").returncode, 0)
         self.run_cli("SET", "key", "value")
         master, slave = pty.openpty()
         self.addCleanup(os.close, master)
@@ -139,7 +163,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(repl.returncode, 0)
         self.assertEqual(termios.tcgetattr(slave), original)
 
-    def test_stale_socket_after_crash_is_replaced_on_next_command(self):
+    def test_stale_socket_after_crash_requires_explicit_restart(self):
         foreground = subprocess.Popen(
             (sys.executable, "-m", "mini_redis.daemon", "--runtime-dir", self.directory.name),
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -153,9 +177,39 @@ class CliTests(unittest.TestCase):
         foreground.kill()
         foreground.wait(timeout=3)
         self.assertTrue(os.path.exists(path))
+        failed = self.run_cli("SET", "key", "after")
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("daemon start", failed.stderr)
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(self.run_cli("daemon", "start").returncode, 0)
         result = self.run_cli("SET", "key", "after")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "OK\n")
+
+    def test_runtime_directories_isolate_servers_and_channels(self):
+        other_directory = tempfile.TemporaryDirectory(prefix="mr-other-")
+        self.addCleanup(other_directory.cleanup)
+        other_command = self.command[:-1] + (other_directory.name,)
+
+        def run_other(*arguments):
+            return subprocess.run(other_command + arguments, cwd=ROOT,
+                                  capture_output=True, text=True, timeout=6)
+
+        self.addCleanup(run_other, "daemon", "stop")
+        self.assertEqual(self.run_cli("daemon", "start").returncode, 0)
+        self.assertEqual(run_other("daemon", "start").returncode, 0)
+        self.assertEqual(self.run_cli("SET", "key", "A").stdout, "OK\n")
+        self.assertEqual(run_other("GET", "key").stdout, "(nil)\n")
+        self.assertEqual(run_other("SET", "key", "B").stdout, "OK\n")
+        self.assertEqual(self.run_cli("GET", "key").stdout, '"A"\n')
+        self.assertEqual(run_other("GET", "key").stdout, '"B"\n')
+        with Client.open(RuntimePaths(self.directory.name)) as subscriber:
+            subscriber.subscribe("news")
+            self.assertEqual(run_other("PUBLISH", "news", "other").stdout, "(integer) 0\n")
+            self.assertEqual(self.run_cli("PUBLISH", "news", "local").stdout, "(integer) 1\n")
+            self.assertEqual(subscriber.receive_message(timeout=2).data, "local")
+        self.assertEqual(self.run_cli("daemon", "stop").returncode, 0)
+        self.assertEqual(run_other("GET", "key").stdout, '"B"\n')
 
     def test_help_does_not_start_daemon(self):
         result = subprocess.run((sys.executable, os.path.join(ROOT, "main.py"), "--help"),
