@@ -6,7 +6,6 @@ import sys
 import time
 
 from .client import Client
-from .commands import quote
 from .protocol import ProtocolError
 from .repl import Repl
 from .runtime import RuntimePaths
@@ -81,19 +80,14 @@ def main(argv=None):
         with Client.open(paths) as client:
             if not arguments:
                 return Repl(client).run()
-            line = " ".join(quote(argument) for argument in arguments)
-            result = client.request(line, on_event=lambda text: print(text, flush=True))
+            result = client.execute(*arguments, on_event=lambda text: print(text, flush=True))
             if result.text:
                 print(result.text, flush=True)
             if result.error:
                 return 1
             if arguments[0].upper() == "SUBSCRIBE":
-                client.socket.settimeout(None)
-                while True:
-                    kind, text = client.receive()
-                    if kind != "M":
-                        raise ProtocolError("unexpected response while subscribed")
-                    print(text, flush=True)
+                for message in client.listen():
+                    print(message.text, flush=True)
             return 0
     except KeyboardInterrupt:
         print()
