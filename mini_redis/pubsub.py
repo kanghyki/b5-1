@@ -1,6 +1,7 @@
 """연결별 구독 상태와 제한된 FIFO 출력 큐를 관리하는 채널 브로커."""
 
 from .commands import quote
+from .protocol import MAX_FRAME
 from .structures.hash_map import HashMap
 from .structures.linked_list import DoublyLinkedList
 
@@ -27,7 +28,8 @@ class Subscriber:
         if self.overflowed:
             return False
         delivery = Delivery(kind, text)
-        if self.pending_bytes + delivery.byte_size > self.max_pending_bytes:
+        if (delivery.byte_size - 4 > MAX_FRAME or
+                self.pending_bytes + delivery.byte_size > self.max_pending_bytes):
             self.overflowed = True
             return False
         self.pending.insert_back(delivery)
