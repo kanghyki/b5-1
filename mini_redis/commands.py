@@ -57,7 +57,7 @@ class CommandProcessor:
     def _arity(tokens, expected):
         if len(tokens) != expected:
             raise CommandError(
-                "ERR wrong number of arguments for '%s' command" % tokens[0].upper()
+                f"ERR wrong number of arguments for '{tokens[0].upper()}' command"
             )
 
     def execute(self, line):
@@ -85,16 +85,16 @@ class CommandProcessor:
             return "(nil)" if value is None else quote(value)
         if command == "DEL":
             self._arity(tokens, 2)
-            return "(integer) %d" % store.delete(tokens[1])
+            return f"(integer) {store.delete(tokens[1])}"
         if command == "EXISTS":
             self._arity(tokens, 2)
-            return "(integer) %d" % store.exists(tokens[1])
+            return f"(integer) {store.exists(tokens[1])}"
         if command == "DBSIZE":
             self._arity(tokens, 1)
-            return "(integer) %d" % store.dbsize()
+            return f"(integer) {store.dbsize()}"
         if command == "KEYS":
             self._arity(tokens, 1)
-            lines = ["%d. %s" % (index, quote(key))
+            lines = [f"{index}. {quote(key)}"
                      for index, key in enumerate(store.keys(), 1)]
             return "\n".join(lines) if lines else "(empty array)"
         if command == "CONFIG":
@@ -107,11 +107,13 @@ class CommandProcessor:
             self._arity(tokens, 2)
             if tokens[1].lower() != "memory":
                 raise CommandError("ERR expected INFO memory")
-            return "used_memory:%d\nmaxmemory:%d\nevicted_keys:%d" % store.memory_info()
+            used_memory, maxmemory, evicted_keys = store.memory_info()
+            return (f"used_memory:{used_memory}\nmaxmemory:{maxmemory}\n"
+                    f"evicted_keys:{evicted_keys}")
         if command == "EXPIRE":
             self._arity(tokens, 3)
-            return "(integer) %d" % store.expire(tokens[1], parse_integer(tokens[2]))
+            return f"(integer) {store.expire(tokens[1], parse_integer(tokens[2]))}"
         if command == "TTL":
             self._arity(tokens, 2)
-            return "(integer) %d" % store.ttl(tokens[1])
-        raise CommandError("ERR unknown command '%s'" % tokens[0])
+            return f"(integer) {store.ttl(tokens[1])}"
+        raise CommandError(f"ERR unknown command '{tokens[0]}'")

@@ -62,7 +62,7 @@ class HeapTests(unittest.TestCase):
         randomizer = random.Random(42)
         heap = MinHeap()
         for index in range(150):
-            heap.push((randomizer.randrange(1000), "key%d" % index))
+            heap.push((randomizer.randrange(1000), f"key{index}"))
         self.assertEqual(heap.size, 150)
         previous = heap.peek()
         while heap.size:
