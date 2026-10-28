@@ -15,11 +15,11 @@ class Entry:
     def __init__(self, key, value, byte_size):
         self.key, self.value, self.byte_size = key, value, byte_size
         self.lru_node = None
-        self.expiry = None
+        self.expire_at = None
 
 
 class Store:
-    """해시맵 조회 + O(1) LRU 이동 + O(log n) TTL 갱신·삭제."""
+    """해시맵 조회 + O(1) LRU 이동 + 힙 기반 lazy TTL 만료."""
 
     def __init__(self, clock=time.monotonic):
         self._clock = clock
@@ -31,24 +31,20 @@ class Store:
         self.evicted_keys = 0
 
     def _delete(self, entry):
-        """삭제 경로를 통합하여 세 자료구조와 메모리 합계를 동기화한다."""
-        if entry.expiry is not None:
-            self._expiry.remove(entry.expiry)
-            entry.expiry = None
+        """삭제 경로를 통합한다. 힙의 항목은 purge_expired()가 꺼낼 때 버린다."""
         self._lru.remove_node(entry.lru_node)
         self._entries.remove(entry.key)
         self.used_memory -= entry.byte_size
 
     def purge_expired(self):
+        """만료 시각이 지난 힙 항목을 꺼내 현재 TTL과 일치할 때만 키를 삭제한다."""
         now = self._clock()
-        while self._expiry.size and self._expiry.peek().priority <= now:
-            self._delete(self._expiry.peek().value)
-
-    def next_expiry_delay(self):
-        """데몬이 입력을 기다리는 동안에도 TTL 시점에 깨어나게 한다."""
-        if self._expiry.size == 0:
-            return None
-        return max(0.0, self._expiry.peek().priority - self._clock())
+        while self._expiry.size and self._expiry.peek()[0] <= now:
+            expire_at, key = self._expiry.pop()
+            entry = self._entries.get(key)
+            # TTL이 바뀌었거나 키가 삭제·재생성되었다면 낡은 항목이다.
+            if entry is not None and entry.expire_at == expire_at:
+                self._delete(entry)
 
     def set(self, key, value):
         self.purge_expired()
@@ -61,9 +57,7 @@ class Store:
             entry.lru_node = self._lru.insert_front(entry)
             self._entries.put(key, entry)
         else:
-            if entry.expiry is not None:
-                self._expiry.remove(entry.expiry)
-                entry.expiry = None
+            entry.expire_at = None
             self.used_memory -= entry.byte_size
             entry.value, entry.byte_size = value, byte_size
             self._lru.move_to_front(entry.lru_node)
@@ -119,11 +113,8 @@ class Store:
         if seconds <= 0:
             self._delete(entry)
             return 1
-        deadline = self._clock() + seconds
-        if entry.expiry is None:
-            entry.expiry = self._expiry.push(deadline, entry)
-        else:
-            self._expiry.update(entry.expiry, deadline)
+        entry.expire_at = self._clock() + seconds
+        self._expiry.push((entry.expire_at, key))
         return 1
 
     def ttl(self, key):
@@ -131,6 +122,6 @@ class Store:
         entry = self._entries.get(key)
         if entry is None:
             return -2
-        if entry.expiry is None:
+        if entry.expire_at is None:
             return -1
-        return max(0, int(entry.expiry.priority - self._clock()))
+        return max(0, int(entry.expire_at - self._clock()))

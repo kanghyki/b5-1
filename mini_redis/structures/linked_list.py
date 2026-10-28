@@ -2,27 +2,24 @@
 
 
 class Node:
-    """리스트 소속을 추적하여 다른 리스트의 노드 삭제를 방지한다."""
-
-    def __init__(self, data, owner=None):
+    def __init__(self, data):
         self.data = data
         self.prev = None
         self.next = None
-        self.owner = owner
 
 
 class DoublyLinkedList:
-    """두 센티널 사이에 데이터를 저장하며 메시지 FIFO와 LRU에 재사용한다."""
+    """두 센티널 사이에 데이터를 저장하며 LRU와 해시맵 버킷에 재사용한다."""
 
     def __init__(self):
-        self._head = Node(None, self)
-        self._tail = Node(None, self)
+        self._head = Node(None)
+        self._tail = Node(None)
         self._head.next = self._tail
         self._tail.prev = self._head
         self.size = 0
 
     def _insert_between(self, node, left, right):
-        node.prev, node.next, node.owner = left, right, self
+        node.prev, node.next = left, right
         left.next, right.prev = node, node
         self.size += 1
         return node
@@ -34,10 +31,9 @@ class DoublyLinkedList:
         return self._insert_between(Node(data), self._tail.prev, self._tail)
 
     def remove_node(self, node):
-        if node.owner is not self or node is self._head or node is self._tail:
-            raise ValueError("node does not belong to this list")
+        """이 리스트에 연결된 데이터 노드만 넘겨야 한다."""
         node.prev.next, node.next.prev = node.next, node.prev
-        node.prev = node.next = node.owner = None
+        node.prev = node.next = None
         self.size -= 1
         return node.data
 

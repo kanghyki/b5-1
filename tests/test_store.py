@@ -20,16 +20,14 @@ class StoreTests(unittest.TestCase):
         store = self.store
         self.assertEqual(store._entries.size, store._lru.size)
         memory = 0
-        expiries = 0
+        heap_items = store._expiry._array[:store._expiry.size]
         for pair in store._entries.items():
             entry = pair.value
             memory += len(entry.key.encode("utf-8")) + len(entry.value.encode("utf-8"))
             self.assertIs(entry.lru_node.data, entry)
-            if entry.expiry is not None:
-                expiries += 1
-                self.assertIs(entry.expiry.value, entry)
+            if entry.expire_at is not None:
+                self.assertIn((entry.expire_at, entry.key), heap_items)
         self.assertEqual(memory, store.used_memory)
-        self.assertEqual(expiries, store._expiry.size)
 
     def test_subject_memory_and_lru_example(self):
         store = self.store
@@ -110,15 +108,15 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(store.memory_info(), (0, 0, 0))
         self.assert_consistent()
 
-    def test_expire_reschedule_changes_heap_order_without_stale_items(self):
+    def test_expire_reschedule_ignores_stale_heap_items(self):
         store = self.store
         store.set("a", "1")
         store.set("b", "2")
         store.expire("a", 2)
         store.expire("b", 3)
         store.expire("a", 5)
-        self.assertEqual(store._expiry.size, 2)
-        self.assertEqual(store.next_expiry_delay(), 3)
+        self.assertEqual(store._expiry.size, 3)
+        self.assertEqual(store._expiry.peek(), (102.0, "a"))
         self.clock.now += 3
         self.assertEqual(store.exists("b"), 0)
         self.assertEqual(store.exists("a"), 1)
@@ -133,7 +131,6 @@ class StoreTests(unittest.TestCase):
         store.expire("a", 1)
         store.set("a", "new")
         self.assertEqual(store.ttl("a"), -1)
-        self.assertEqual(store._expiry.size, 0)
         store.expire("a", 1)
         store.delete("a")
         store.set("a", "recreated")
@@ -149,7 +146,9 @@ class StoreTests(unittest.TestCase):
         store.expire("a", 10)
         store.configure_maxmemory(2)
         store.set("b", "2")
-        self.assertEqual(store._expiry.size, 0)
+        self.assertEqual(store.evicted_keys, 1)
+        self.clock.now += 10
+        self.assertEqual(store.exists("b"), 1)
         self.assertEqual(store.evicted_keys, 1)
         self.assert_consistent()
 
