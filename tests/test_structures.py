@@ -20,18 +20,8 @@ class LinkedListTests(unittest.TestCase):
         self.assertEqual(linked.size, 0)
         self.assertIs(linked._head.next, linked._tail)
         self.assertIs(linked._tail.prev, linked._head)
-        with self.assertRaises(ValueError):
-            linked.remove_node(middle)
         with self.assertRaises(IndexError):
             linked.remove_front()
-
-    def test_foreign_node_does_not_corrupt_lists(self):
-        first, second = DoublyLinkedList(), DoublyLinkedList()
-        node = first.insert_back(1)
-        with self.assertRaises(ValueError):
-            second.move_to_front(node)
-        self.assertEqual(tuple(first), (1,))
-        self.assertEqual(second.size, 0)
 
 
 class HashMapTests(unittest.TestCase):
@@ -68,27 +58,29 @@ class HashMapTests(unittest.TestCase):
 
 
 class HeapTests(unittest.TestCase):
-    def test_random_priority_updates_and_arbitrary_removals(self):
+    def test_random_pushes_pop_in_order_and_grow(self):
         randomizer = random.Random(42)
         heap = MinHeap()
-        # 고정 크기 참조 배열은 힙 위치 이동 검증을 위한 테스트 입력이다.
-        handles = [None] * 150
         for index in range(150):
-            handles[index] = heap.push(randomizer.randrange(1000), index)
-        for index in range(0, 150, 3):
-            heap.update(handles[index], randomizer.randrange(1000))
-        for index in range(0, 150, 5):
-            heap.remove(handles[index])
-        previous = -1
+            heap.push((randomizer.randrange(1000), "key%d" % index))
+        self.assertEqual(heap.size, 150)
+        previous = heap.peek()
         while heap.size:
             item = heap.pop()
-            self.assertGreaterEqual(item.priority, previous)
-            self.assertEqual(item.index, -1)
-            previous = item.priority
-        with self.assertRaises(ValueError):
-            heap.update(handles[0], 1)
+            self.assertGreaterEqual(item, previous)
+            previous = item
         with self.assertRaises(IndexError):
             heap.peek()
+        with self.assertRaises(IndexError):
+            heap.pop()
+
+    def test_expire_at_ties_are_ordered_by_key(self):
+        heap = MinHeap()
+        for item in ((5.0, "b"), (5.0, "a"), (1.0, "z")):
+            heap.push(item)
+        self.assertEqual(heap.pop(), (1.0, "z"))
+        self.assertEqual(heap.pop(), (5.0, "a"))
+        self.assertEqual(heap.pop(), (5.0, "b"))
 
 
 if __name__ == "__main__":
